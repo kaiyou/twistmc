@@ -9,6 +9,13 @@ designs.
 Twistmc grants the programmer with a simple syntax for semantically
 describe complex dependencies between application components and
 hide all the internals of aynchronous dependency management.
+
+Details of implementation do look like a dirty hack for a reason: they
+are in fact a terrible accumulation of dirty hacks. Improvements to the
+core structure of this module are more than welcome. However, as very
+ofter reminded by glyph himself: the use of deferred objects for
+synchronization is a misuse of Twisted primitives; let's keep misusing
+those and build some interesting framework extension upon them.
 """
 
 import inspect
@@ -18,8 +25,8 @@ from twisted.internet import defer, reactor
 from zope import interface
 
 
-#: Base depth to the declared class frame.
-DEPTH = 2
+#: Flag for installed classes.
+INSTALLED = "__twistmc_installed__"
 
 #: Name of the setup method list.
 SETUP = "__twistmc_setup__"
@@ -28,31 +35,24 @@ SETUP = "__twistmc_setup__"
 READY = "__twistmc_ready__"
 
 
-def _set(depth, key, value):
-    """ Set a class local.
-    """
-    frame = inspect.currentframe(depth)
-    frame.f_locals[key] = value
-
-
-def _get(depth, key):
-    """ Get a class local.
-    """
-    frame = inspect.currentframe(depth)
-    return frame.f_locals[key] if key in frame.f_locals else None
-
-
-def _install(depth):
+def install(type_locals):
     """ Install component-related metadata into the class being declared.
     """
     # Replace the class metaclass with our component implementation, so
     # that the class is automagically populated with necessary attributes
-    # for dependency management.
-    if not _get(depth + 1, "__metaclass__"):
-        _set(depth + 1, "__metaclass__", metaclass)
+    # for dependency management. Make sure that the old metaclass is saved
+    # and called properly: we rely heavily on Twisted, which itself makes
+    # extensive use of metaclass hacks.
+    if INSTALLED not in type_locals:
+        if "__metaclass__" in type_locals:
+            chain = type_locals["__metaclass__"]
+        else:
+            chain = type
+        type_locals["__metaclass__"] = functools.partial(metaclass, chain)
+        type_locals[INSTALLED] = True
     # Set some default values for setup and teardon methods.
-    if not _get(depth + 1, SETUP):
-        _set(depth + 1, SETUP, list())
+    if not SETUP in type_locals:
+        type_locals[SETUP] = list()
 
 
 def plugin(function, *args, **kwargs):
@@ -62,9 +62,15 @@ def plugin(function, *args, **kwargs):
     declares a class attribute by using plugin() is implicitly
     declared as a Twistmc component. Thus, components may inherit from
     usual Twisted classes or anything else.
+
+    Plugins may be either callable objects that will be called at instanciation
+    time in order to create simple objects and other components to depend on,
+    or they may be interface (zope interfaces). Components that depend on
+    interfaces are not started up until another complement is ready, that
+    implements the interface.
     """
     # Install if not yet.
-    _install(DEPTH)
+    install(inspect.currentframe(1).f_locals)
     # Plugins are actually instanciated whenever the class itself is
     # instanciated.
     return Plugin(function, *args, **kwargs)
@@ -84,9 +90,9 @@ def setup(function):
         on the asynchronous paradigm.
     """
     # Install if not yet.
-    _install(DEPTH)
+    install(inspect.currentframe(1).f_locals)
     # Append a setup method
-    _get(DEPTH, SETUP).append(function)
+    inspect.currentframe(1).f_locals[SETUP].append(function)
 
 
 def component(objtype):
@@ -98,11 +104,11 @@ def component(objtype):
     return objtype
 
 
-def metaclass(classname, parents, attributes):
+def metaclass(chain, classname, parents, attributes):
     """ Metaclass for every implicit component.
     """
     # Simply call the class decorator.
-    return component(type(classname, parents, attributes))
+    return component(chain(classname, parents, attributes))
 
 
 def new_component(new, objtype, *args, **kwargs):
@@ -164,12 +170,25 @@ def set_ready(_, obj):
 
     :param obj: The instance to set as ready.
     """
+    # Make sure we iterate on a copy of the dictionary keys because the
+    # dictionary will be altered during the loop.
+    for iface in Plugin.awaiting.keys():
+        if iface.providedBy(obj):
+            for deferred in Plugin.awaiting[iface]:
+                deferred.callback(obj)
+            del Plugin.awaiting[iface]
     getattr(obj, READY).callback(None)
 
 
 class Plugin(object):
     """ Implementation of the property protocol for plugin attributes.
     """
+
+    #: Registry of components per interface implemented.
+    registry = dict()
+
+    #: Registry of plugins awaiting for specific interfaces to be implemented.
+    awaiting = dict()
 
     def __init__(self, function, *args, **kwargs):
         self.constructor = (function, args, kwargs)
@@ -186,14 +205,35 @@ class Plugin(object):
         # behavior implemented. However, one should never call init manually.
         if obj in self.values:
             raise ValueError("Cannot initialize a TwistMC plugin twice.")
-        # First call the object constructor. This might be an actual type for
-        # type instance construction or any callable object (function, etc.).
-        function, args, kwargs = self.constructor
-        self.values[obj] = function(*args, **kwargs)
-        if hasattr(self.values[obj], READY):
-            return getattr(self.values[obj], READY)
+        dependency, args, kwargs = self.constructor
+        # Check if the dependency is an interface. In that case, check if the
+        # interface is implemented already. If not, defer until an
+        # implementation is available.
+        if isinstance(dependency, interface.interface.InterfaceClass):
+            if dependency in Plugin.registry:
+                self.values[obj] = Plugin.registry[dependency][0]
+                return defer.succeed(None)
+            else:
+                if dependency not in Plugin.awaiting:
+                    Plugin.awaiting[dependency] = list()
+                deferred = defer.Deferred()
+                deferred.addCallback(self.assign, obj)
+                Plugin.awaiting[dependency].append(deferred)
+                return deferred
         else:
-            return defer.suceed(None)
+            # First call the object constructor. This might be an actual type
+            # for type instance construction or any callable object (function,
+            # etc.).
+            self.values[obj] = dependency(*args, **kwargs)
+            if hasattr(self.values[obj], READY):
+                return getattr(self.values[obj], READY)
+            else:
+                return defer.suceed(None)
+
+    def assign(self, implementation, obj):
+        """ Assign an implementation to an object.
+        """
+        self.values[obj] = implementation
 
     def __get__(self, obj, objtype=None):
         if obj in self.values:
