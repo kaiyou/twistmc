@@ -20,6 +20,7 @@ those and build some interesting framework extension upon them.
 
 import inspect
 import functools
+import breadcrumbs
 
 from twisted.internet import defer, reactor
 from zope import interface
@@ -100,7 +101,8 @@ def component(objtype):
     """
     # We ultimately simply aim at re-defining the initialization
     # method for easy instance interception.
-    objtype.__new__ = functools.partial(new_component, objtype.__new__, objtype)
+    objtype.__init__ = functools.partial(
+        init_component, objtype.__init__, objtype)
     return objtype
 
 
@@ -111,14 +113,15 @@ def metaclass(chain, classname, parents, attributes):
     return component(chain(classname, parents, attributes))
 
 
-def new_component(new, objtype, *args, **kwargs):
+def init_component(init, objtype, obj, *args, **kwargs):
     """ Replacement method for the initialization of components.
 
     :param function new: The original __new__ function for the given objtype.
     :param objtype: The object type to create an instance of.
     """
-    # First create the new instance in a very classical way.
-    obj = new(*args, **kwargs)
+    print init, objtype, obj
+    # First call the original init method.
+    init(obj, *args, **kwargs)
     # Simply set the instance-specific deferred object to synchronize with
     # dependant components.
     setattr(obj, READY, defer.Deferred())
@@ -221,7 +224,15 @@ class Plugin(object):
                 Plugin.awaiting[dependency].append(deferred)
                 return deferred
         else:
-            # First call the object constructor. This might be an actual type
+            # Collapse any breadcrumbs.
+            args = list(args)
+            for index, value in enumerate(args):
+                if type(value) is breadcrumbs.Breadcrumb:
+                    args[index] = breadcrumbs.collapse(value, obj)
+            for index, value in kwargs.iteritems():
+                if type(value) is breadcrumbs.Breadcrumb:
+                    args[index] = breadcrumbs.collapse(value, obj)
+            # Call the object constructor. This might be an actual type
             # for type instance construction or any callable object (function,
             # etc.).
             self.values[obj] = dependency(*args, **kwargs)
