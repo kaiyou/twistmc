@@ -21,6 +21,7 @@ those and build some interesting framework extension upon them.
 import inspect
 import functools
 import breadcrumbs
+import types
 
 from twisted.internet import defer, reactor
 from zope import interface
@@ -101,8 +102,8 @@ def component(objtype):
     """
     # We ultimately simply aim at re-defining the initialization
     # method for easy instance interception.
-    objtype.__init__ = functools.partial(
-        init_component, objtype.__init__, objtype)
+    objtype.__new__ = functools.partial(
+        new_component, objtype.__new__, objtype.__init__)
     return objtype
 
 
@@ -113,13 +114,21 @@ def metaclass(chain, classname, parents, attributes):
     return component(chain(classname, parents, attributes))
 
 
+def new_component(new, init, objtype, *args, **kwargs):
+    """ Replace the init method after creating the object.
+    """
+    obj = new(objtype)
+    objtype.__init__ = types.MethodType(functools.partial(
+        init_component, objtype.__init__, objtype), obj)
+    return obj
+
+
 def init_component(init, objtype, obj, *args, **kwargs):
     """ Replacement method for the initialization of components.
 
     :param function new: The original __new__ function for the given objtype.
     :param objtype: The object type to create an instance of.
     """
-    print init, objtype, obj
     # First call the original init method.
     init(obj, *args, **kwargs)
     # Simply set the instance-specific deferred object to synchronize with
@@ -144,8 +153,6 @@ def init_component(init, objtype, obj, *args, **kwargs):
     deferred = defer.DeferredList(awaiting)
     deferred.addCallback(run_setup, obj, objtype)
     deferred.addCallback(set_ready, obj)
-    # Return the fresh instance.
-    return obj
 
 
 def run_setup(_, obj, objtype):
