@@ -117,7 +117,7 @@ def metaclass(chain, classname, parents, attributes):
 def new_component(new, init, objtype, *args, **kwargs):
     """ Replace the init method after creating the object.
     """
-    obj = new(objtype)
+    obj = new(objtype, *args, **kwargs)
     objtype.__init__ = types.MethodType(functools.partial(
         init_component, objtype.__init__, objtype), obj)
     return obj
