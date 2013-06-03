@@ -97,6 +97,28 @@ def setup(function):
     inspect.currentframe(1).f_locals[SETUP].append(function)
 
 
+def teardown(function):
+    """ Method decorator to declare a teardown method.
+
+    The teardown method is called to tear the module down, ie. put the
+    component in a passive state where it shall not modify the application
+    state anymore (there is no simple way to cold-remove a component).
+
+    ..notice::
+
+        The teardown method must be called manually, il will not be called
+        by TwistMC when components are garbage collected. Calling it manually
+        will however remove the component from internal TwistMC registries.
+    """
+    def replacement(obj, *args, **kwargs):
+        """ Replacement function that performs teardown.
+        """
+        run_teardown(obj)
+        return function(obj, *args, **kwargs)
+
+    return replacement
+
+
 def component(objtype):
     """ Class decorator for explicit component declaration.
     """
@@ -119,7 +141,7 @@ def new_component(new, init, objtype, *args, **kwargs):
     """
     obj = new(objtype, *args, **kwargs)
     objtype.__init__ = types.MethodType(functools.partial(
-        init_component, objtype.__init__, objtype), obj)
+        init_component, init, objtype), obj)
     return obj
 
 
@@ -145,7 +167,7 @@ def init_component(init, objtype, obj, *args, **kwargs):
     awaiting = [foolguard]
     # Simply add every attribute if its type is Plugin. Also make sure that
     # plugins are properly initialized for the given instance.
-    for key, value in objtype.__dict__.iteritems():
+    for value in objtype.__dict__.itervalues():
         if type(value) is Plugin:
             awaiting.append(value.init(obj))
     # Explicitely wait for every dependance to be ready, then start this one
@@ -166,11 +188,21 @@ def run_setup(_, obj, objtype):
     """
     # List every defer the wait for them.
     defers = list()
-    for setup in getattr(objtype, SETUP):
+    for setup_method in getattr(objtype, SETUP):
         # Use maybeDeferred so that setup functions may be straightforward
         # and not bother returning deferred objects.
-        defers.append(defer.maybeDeferred(setup, obj))
+        defers.append(defer.maybeDeferred(setup_method, obj))
     return defer.DeferredList(defers)
+
+
+def run_teardown(obj):
+    """ One of the component instance teardown functions was run.
+    """
+    # Mostly make sure that no component is teared down that was used as a
+    # plugin in another component.
+    for plugin_obj in Plugin.plugins:
+        if obj in plugin_obj.values.itervalues():
+            raise RuntimeError("Other components depend on this one")
 
 
 def set_ready(_, obj):
@@ -194,6 +226,9 @@ class Plugin(object):
     """ Implementation of the property protocol for plugin attributes.
     """
 
+    #: Plugin registry.
+    plugins = list()
+
     #: Registry of components per interface implemented.
     registry = dict()
 
@@ -203,6 +238,7 @@ class Plugin(object):
     def __init__(self, function, *args, **kwargs):
         self.constructor = (function, args, kwargs)
         self.values = dict()
+        self.plugins.append(self)
 
     def init(self, obj):
         """ Instanciate the plugin for a given component instance.
