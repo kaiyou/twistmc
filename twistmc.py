@@ -36,6 +36,9 @@ SETUP = "__twistmc_setup__"
 #: Name of the component ready-flag deferred.
 READY = "__twistmc_ready__"
 
+#: List of plugin attributes.
+PLUGINS = "__twistmc_plugins__"
+
 
 def install(type_locals):
     """ Install component-related metadata into the class being declared.
@@ -119,25 +122,39 @@ def teardown(function):
     return replacement
 
 
-def component(objtype):
-    """ Class decorator for explicit component declaration.
+def metaclass(chain, classname, parents, attributes):
+    """ Metaclass for every implicit component.
     """
+    # Chain the class creation.
+    objtype = chain(classname, parents, attributes)
     # We ultimately simply aim at re-defining the initialization
     # method for easy instance interception.
     objtype.__new__ = functools.partial(
         new_component, objtype.__new__, objtype.__init__)
+    # Add the objtype plugins: include both local and parent
+    # plugins. Also rebuild the setup functions list.
+    plugins = list()
+    setup = list()
+    for parent in parents:
+        if hasattr(parent, PLUGINS):
+            plugins.extend(getattr(parent, PLUGINS))
+        if hasattr(parent, SETUP):
+            setup.extend(getattr(parent, SETUP))
+    for name,attribute in attributes.iteritems():
+        if type(attribute) is Plugin:
+            plugins.append(attribute)
+    setattr(objtype, PLUGINS, plugins)
+    setattr(objtype, SETUP, setup + getattr(objtype, SETUP))
+    # Return the freshly built object type.
     return objtype
-
-
-def metaclass(chain, classname, parents, attributes):
-    """ Metaclass for every implicit component.
-    """
-    # Simply call the class decorator.
-    return component(chain(classname, parents, attributes))
 
 
 def new_component(new, init, objtype, *args, **kwargs):
     """ Replace the init method after creating the object.
+
+    :param new: The original instance creation function.
+    :param init: The original initialization function.
+    :param objtype: The object type to create an instance of.
     """
     obj = new(objtype, *args, **kwargs)
     objtype.__init__ = types.MethodType(functools.partial(
@@ -148,28 +165,32 @@ def new_component(new, init, objtype, *args, **kwargs):
 def init_component(init, objtype, obj, *args, **kwargs):
     """ Replacement method for the initialization of components.
 
-    :param function new: The original __new__ function for the given objtype.
+    :param init: The original initialization function.
     :param objtype: The object type to create an instance of.
+    :param obj: The object to be initialized.
     """
     # First call the original init method.
     init(obj, *args, **kwargs)
     # Simply set the instance-specific deferred object to synchronize with
     # dependant components.
     setattr(obj, READY, defer.Deferred())
+    # Do not load plugins immediately, so that the caller can perform external
+    # attribute initialization before breadcrumbs are resolved.
+    reactor.callLater(0.0, init_plugins, objtype, obj)
+
+
+def init_plugins(objtype, obj):
+    """ Init the component plugins.
+
+    :param objtype: The object type to create an instance of.
+    :param obj: The object to be initialized.
+    """
     # List every component to wait for before starting this very one.
-    # Adding a fooldguard deferred object adds some overhead and may sound
-    # useless. However, Twisted internel optimizations have deferred objects
-    # fire right when adding callbacks if the deferred has already been fired.
-    # The foolguard help ensuring nothing will fire until back to the reactor
-    # loop.
-    foolguard = defer.Deferred()
-    reactor.callLater(0.0, foolguard.callback, None)
-    awaiting = [foolguard]
-    # Simply add every attribute if its type is Plugin. Also make sure that
-    # plugins are properly initialized for the given instance.
-    for value in objtype.__dict__.itervalues():
-        if type(value) is Plugin:
-            awaiting.append(value.init(obj))
+    awaiting = list()
+    # Initialize plugins.
+    if hasattr(objtype, PLUGINS):
+        for plugin in getattr(objtype, PLUGINS):
+            awaiting.append(plugin.init(obj))
     # Explicitely wait for every dependance to be ready, then start this one
     # and finally set it as ready.
     deferred = defer.DeferredList(awaiting)
@@ -212,13 +233,18 @@ def set_ready(_, obj):
 
     :param obj: The instance to set as ready.
     """
+    # For every interface imlemented by the ready object, take actions
+    # and populate the registry.
     # Make sure we iterate on a copy of the dictionary keys because the
     # dictionary will be altered during the loop.
-    for iface in Plugin.awaiting.keys():
-        if iface.providedBy(obj):
+    for iface in interface.providedBy(obj):
+        if iface in Plugin.awaiting:
             for deferred in Plugin.awaiting[iface]:
                 deferred.callback(obj)
             del Plugin.awaiting[iface]
+        if iface not in Plugin.registry:
+            Plugin.registry[iface] = list()
+        Plugin.registry[iface].append(obj)
     getattr(obj, READY).callback(None)
 
 
@@ -282,7 +308,7 @@ class Plugin(object):
             if hasattr(self.values[obj], READY):
                 return getattr(self.values[obj], READY)
             else:
-                return defer.suceed(None)
+                return defer.succeed(None)
 
     def assign(self, implementation, obj):
         """ Assign an implementation to an object.
