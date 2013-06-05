@@ -81,6 +81,15 @@ def plugin(function, *args, **kwargs):
     return Plugin(function, *args, **kwargs)
 
 
+def collection(iface):
+    """ Plug a collection inside a component.
+
+    Simply create a collection plugin as a class attribute (implementing the
+    descriptor protocol).
+    """
+    return Collection(iface)
+
+
 def setup(function):
     """ Method decorator to declare a setup method.
 
@@ -120,6 +129,15 @@ def teardown(function):
         return function(obj, *args, **kwargs)
 
     return replacement
+
+
+def ready(obj):
+    """ Return a deferred fired when the object is ready.
+    """
+    deferred = defer.Deferred()
+    if hasattr(obj, READY):
+        getattr(obj, READY).addCallbacks(deferred.callback, deferred.errback)
+    return deferred
 
 
 def metaclass(chain, classname, parents, attributes):
@@ -224,6 +242,11 @@ def run_teardown(obj):
     for plugin_obj in Plugin.plugins:
         if obj in plugin_obj.values.itervalues():
             raise RuntimeError("Other components depend on this one")
+    # Also remove the component from the registry so that it is not provided
+    # to anyone anymore.
+    for iface in interface.providedBy(obj):
+        if iface in Plugin.registry and obj in Plugin.registry[iface]:
+            Plugin.registry[iface].remove(obj)
 
 
 def set_ready(_, obj):
@@ -320,6 +343,27 @@ class Plugin(object):
             return self.values[obj]
         else:
             raise ValueError("Attribute accessed before ready")
+
+    def __set__(self, obj, value):
+        raise TypeError("Plugins can not be modified")
+
+    def __deleted__(self, obj):
+        raise TypeError("Plugins can not be deleted")
+
+
+class Collection(object):
+    """ Very specific plugin that simply provides a list of available
+    components that implement the given interface.
+    """
+
+    def __init__(self, iface):
+        self.iface = iface
+
+    def __get__(self, obj, objtype=None):
+        try:
+            return Plugin.registry[self.iface][:]
+        except KeyError:
+            return list()
 
     def __set__(self, obj, value):
         raise TypeError("Plugins can not be modified")
