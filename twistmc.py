@@ -260,14 +260,15 @@ def set_ready(_, obj):
     # and populate the registry.
     # Make sure we iterate on a copy of the dictionary keys because the
     # dictionary will be altered during the loop.
-    for iface in interface.providedBy(obj):
-        if iface in Plugin.awaiting:
-            for deferred in Plugin.awaiting[iface]:
-                deferred.callback(obj)
-            del Plugin.awaiting[iface]
-        if iface not in Plugin.registry:
-            Plugin.registry[iface] = list()
-        Plugin.registry[iface].append(obj)
+    if interface.providedBy(obj):
+        for iface in interface.providedBy(obj):
+            if iface in Plugin.awaiting:
+                for deferred in Plugin.awaiting[iface]:
+                    deferred.callback(obj)
+                del Plugin.awaiting[iface]
+            if iface not in Plugin.registry:
+                Plugin.registry[iface] = list()
+            Plugin.registry[iface].append(obj)
     getattr(obj, READY).callback(None)
 
 
