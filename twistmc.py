@@ -137,6 +137,8 @@ def ready(obj):
     deferred = defer.Deferred()
     if hasattr(obj, READY):
         getattr(obj, READY).addCallbacks(deferred.callback, deferred.errback)
+    else:
+        deferred.callback(None)
     return deferred
 
 
