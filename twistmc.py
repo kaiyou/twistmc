@@ -20,11 +20,11 @@ those and build some interesting framework extension upon them.
 
 import inspect
 import functools
-import breadcrumbs
+import breadcrumbs  # pylint: disable=F0401
 import types
 
 from twisted.internet import defer, reactor
-from zope import interface
+from zope import interface  # pylint: disable=F0401
 
 
 #: Flag for installed classes.
@@ -154,17 +154,17 @@ def metaclass(chain, classname, parents, attributes):
     # Add the objtype plugins: include both local and parent
     # plugins. Also rebuild the setup functions list.
     plugins = list()
-    setup = list()
+    setups = list()
     for parent in parents:
         if hasattr(parent, PLUGINS):
             plugins.extend(getattr(parent, PLUGINS))
         if hasattr(parent, SETUP):
-            setup.extend(getattr(parent, SETUP))
-    for name,attribute in attributes.iteritems():
+            setups.extend(getattr(parent, SETUP))
+    for attribute in attributes.itervalues():
         if type(attribute) is Plugin:
             plugins.append(attribute)
     setattr(objtype, PLUGINS, plugins)
-    setattr(objtype, SETUP, setup + getattr(objtype, SETUP))
+    setattr(objtype, SETUP, setups + getattr(objtype, SETUP))
     # Return the freshly built object type.
     return objtype
 
@@ -196,7 +196,7 @@ def init_component(init, objtype, obj, *args, **kwargs):
     setattr(obj, READY, defer.Deferred())
     # Do not load plugins immediately, so that the caller can perform external
     # attribute initialization before breadcrumbs are resolved.
-    reactor.callLater(0.0, init_plugins, objtype, obj)
+    reactor.callLater(0.0, init_plugins, objtype, obj)  # pylint: disable=E1101
 
 
 def init_plugins(objtype, obj):
@@ -209,8 +209,8 @@ def init_plugins(objtype, obj):
     awaiting = list()
     # Initialize plugins.
     if hasattr(objtype, PLUGINS):
-        for plugin in getattr(objtype, PLUGINS):
-            awaiting.append(plugin.init(obj))
+        for plugin_attr in getattr(objtype, PLUGINS):
+            awaiting.append(plugin_attr.init(obj))
     # Explicitely wait for every dependance to be ready, then start this one
     # and finally set it as ready.
     deferred = defer.DeferredList(awaiting)
@@ -330,7 +330,7 @@ class Plugin(object):
             # Call the object constructor. This might be an actual type
             # for type instance construction or any callable object (function,
             # etc.).
-            self.values[obj] = dependency(*args, **kwargs)
+            self.values[obj] = dependency(*args, **kwargs)  # pylint: disable=W0142,C0301
             if hasattr(self.values[obj], READY):
                 return getattr(self.values[obj], READY)
             else:
@@ -347,14 +347,14 @@ class Plugin(object):
         else:
             raise ValueError("Attribute accessed before ready")
 
-    def __set__(self, obj, value):
+    def __set__(self, _obj, _value):
         raise TypeError("Plugins can not be modified")
 
-    def __deleted__(self, obj):
+    def __deleted__(self, _obj):  # pylint: disable=R0201
         raise TypeError("Plugins can not be deleted")
 
 
-class Collection(object):
+class Collection(object):  # pylint: disable=R0903
     """ Very specific plugin that simply provides a list of available
     components that implement the given interface.
     """
@@ -368,8 +368,8 @@ class Collection(object):
         except KeyError:
             return list()
 
-    def __set__(self, obj, value):
+    def __set__(self, _obj, _value):
         raise TypeError("Plugins can not be modified")
 
-    def __deleted__(self, obj):
+    def __deleted__(self, _obj):  # pylint: disable=R0201
         raise TypeError("Plugins can not be deleted")
