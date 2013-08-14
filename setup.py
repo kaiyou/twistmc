@@ -11,7 +11,7 @@ setuptools.setup(
     author="Pierre Jaury",
     author_email="pierre@jaury.eu",
     description="Twist My Components!",
-    long_description=open("README.md").read(),
+    long_description=open("README.txt").read(),
     license="GPLv3",
     url="https://github.com/kaiyou/twistmc",
     py_modules=["twistmc"],
