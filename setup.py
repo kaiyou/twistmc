@@ -12,4 +12,5 @@ setuptools.setup(
     description="Twist My Components!",
     license="GPLv3",
     py_modules=['twistmc'],
+    install_requires=['breadcrumbs']
 )
