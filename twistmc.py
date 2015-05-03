@@ -13,6 +13,25 @@ ATTRS = pyconsts.text(
 )
 
 
+class Plugin(object):
+    """ Component plugin.
+
+    A plugin is a separate component that exposes the required set of features.
+    Plugins will be resolved a injection time.
+    """
+    pass
+
+
+class Collection(object):
+    """ Collection of plugins.
+
+    A collection is a set of separate components that expose the required set
+    of features. Unlike plugins, collections are updated at runtime when a
+    new component is loaded or unloaded.
+    """
+    pass
+
+
 def component(*features):
     """ Decorates a component class.
 
@@ -31,6 +50,18 @@ def component(*features):
         return cls
 
     return decorator
+
+
+def plugin(*features):
+    """ Embeds a plugin in a component.
+    """
+    return Plugin()
+
+
+def collection(*features):
+    """ Embeds a collection in a component.
+    """
+    return Collection()
 
 
 def factory(func):
